@@ -42,6 +42,8 @@ namespace g4
         public DMesh3 Mesh;
         public DMeshAABBTree3 Spatial;
         public float CellSize;
+        public int ZSectionLimit;
+        public int ZSectionStart;
 
         // Width of the band around triangles for which exact distances are computed
         // (In fact this is conservative, the band is often larger locally)
@@ -107,11 +109,13 @@ namespace g4
         DenseGrid3i closest_tri_grid;
         DenseGrid3i intersections_grid;
 
-        public MeshSignedDistanceGrid(DMesh3 mesh, double cellSize, DMeshAABBTree3 spatial = null)
+        public MeshSignedDistanceGrid(DMesh3 mesh, double cellSize, int zSectionLimit = 0, int zSectionStart = 0, DMeshAABBTree3 spatial = null)
         {
             Mesh = mesh;
             CellSize = (float)cellSize;
             Spatial = spatial;
+            ZSectionLimit = zSectionLimit;
+            ZSectionStart = zSectionStart;
         }
 
 
@@ -124,6 +128,7 @@ namespace g4
             if (ComputeMode == ComputeModes.NarrowBand_SpatialFloodFill)
                 fBufferWidth = (float)Math.Max(fBufferWidth, 2 * NarrowBandMaxDistance);
             grid_origin = (Vector3f)bounds.Min - fBufferWidth * Vector3f.One - (Vector3f)ExpandBounds;
+            grid_origin[2] = grid_origin[2] + ZSectionStart * CellSize;
             Vector3f max = (Vector3f)bounds.Max + fBufferWidth * Vector3f.One + (Vector3f)ExpandBounds;
             int ni = (int)((max.x - grid_origin.x) / CellSize) + 1;
             int nj = (int)((max.y - grid_origin.y) / CellSize) + 1;
@@ -136,16 +141,29 @@ namespace g4
                 make_level_set3_parallel_floodfill(grid_origin, CellSize, ni, nj, nk, grid, ExactBandWidth);
 
             } else {
-                if (UseParallel) {
-                    if (Spatial != null) {
+                if (UseParallel)
+                {
+                    if (Spatial != null)
+                    {
                         make_level_set3_parallel_spatial(grid_origin, CellSize, ni, nj, nk, grid, ExactBandWidth);
-                    } else {
-                        make_level_set3_parallel(grid_origin, CellSize, ni, nj, nk, grid, ExactBandWidth);
                     }
-                } else {
-                    make_level_set3(grid_origin, CellSize, ni, nj, nk, grid, ExactBandWidth);
+                    else
+                    {
+                        if (ZSectionLimit != 0)
+                        {
+                            make_level_set3_parallel(grid_origin, CellSize, ni, nj, ZSectionLimit, grid, ExactBandWidth, ZSectionStart);
+                        }
+                        else
+                        {
+                            make_level_set3_parallel(grid_origin, CellSize, ni, nj, nk, grid, ExactBandWidth);
+                        }
+                    }
                 }
-            }
+                else
+                {
+                        make_level_set3(grid_origin, CellSize, ni, nj, nk, grid, ExactBandWidth);
+                }
+                }
         }
 
 
@@ -319,10 +337,9 @@ namespace g4
 
 
 
-
         void make_level_set3_parallel(Vector3f origin, float dx,
                              int ni, int nj, int nk,
-                             DenseGrid3f distances, int exact_band)
+                             DenseGrid3f distances, int exact_band, int zOffset = 0)
         {
             distances.resize(ni, nj, nk);
             distances.assign(upper_bound(grid)); // upper bound on distance
@@ -334,7 +351,6 @@ namespace g4
             DenseGrid3i intersection_count = new DenseGrid3i(ni, nj, nk, 0);
 
             if (DebugPrint) System.Console.WriteLine("start");
-
             double ox = (double)origin[0], oy = (double)origin[1], oz = (double)origin[2];
             double invdx = 1.0 / dx;
 
@@ -380,7 +396,7 @@ namespace g4
                         int base_idx = ((j < wj) ? 0 : 1) | ((k < wk) ? 0 : 2);    // construct index into spinlocks array
 
                         for (int i = i0; i <= i1; ++i) {
-                            Vector3d gx = new Vector3d((float)i * dx + origin[0], (float)j * dx + origin[1], (float)k * dx + origin[2]);
+                            Vector3d gx = new Vector3d((float)i * dx + ox, (float)j * dx + oy, (float)k * dx + oz);
                             float d = (float)point_triangle_distance(ref gx, ref xp, ref xq, ref xr);
                             if (d < distances[i, j, k]) {
                                 int lock_idx = base_idx | ((i < wi) ? 0 : 4);
